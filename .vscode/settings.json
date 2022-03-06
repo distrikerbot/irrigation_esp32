@@ -1,0 +1,19 @@
+{
+    "idf.flashType": "UART",
+    "idf.portWin": "COM5",
+    "idf.adapterTargetName": "esp32",
+    "files.associations": {
+        "stdio.h": "c",
+        "esp_event.h": "c",
+        "esp_event_legacy.h": "c",
+        "esp_err.h": "c",
+        "stdbool.h": "c",
+        "esp_netif.h": "c",
+        "esp_netif_types.h": "c",
+        "stdint.h": "c",
+        "string.h": "c",
+        "protocol_examples_common.h": "c",
+        "esp_log.h": "c",
+        "math.h": "c"
+    }
+}
