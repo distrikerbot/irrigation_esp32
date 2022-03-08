@@ -30,9 +30,9 @@
 
 bool cali_enable;
 
-static const char *TAG = "example";
+char recv_buf[512];
 
-static char REQUEST[128];
+static const char *TAG = "example";
 
 typedef struct
 {
@@ -84,7 +84,7 @@ static bool adc_calibration_init(void)
     return cali_enable;
 }
 
-void sendData(void *param)
+char *callapi(char *routeApi)
 {
     const struct addrinfo hints = {
         .ai_family = AF_INET,
@@ -92,86 +92,126 @@ void sendData(void *param)
     };
     struct addrinfo *res;
     struct in_addr *addr;
-    int s, r;
-    char recv_buf[64];
+    int s = 0, r = 0;
+
+
+    int err = getaddrinfo("192.168.2.116", WEB_PORT, &hints, &res);
+
+    if (err != 0 || res == NULL)
+    {
+        ESP_LOGE(TAG, "DNS lookup failed err=%d res=%p", err, res);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        return recv_buf;
+    }
+
+    /* Code to print the resolved IP.
+
+       Note: inet_ntoa is non-reentrant, look at ipaddr_ntoa_r for "real" code */
+    addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
+    ESP_LOGI(TAG, "DNS lookup succeeded. IP=%s", inet_ntoa(*addr));
+
+    s = socket(res->ai_family, res->ai_socktype, 0);
+    if (s < 0)
+    {
+        ESP_LOGE(TAG, "... Failed to allocate socket.");
+        freeaddrinfo(res);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        return recv_buf;
+    }
+    ESP_LOGI(TAG, "... allocated socket");
+
+    if (connect(s, res->ai_addr, res->ai_addrlen) != 0)
+    {
+        ESP_LOGE(TAG, "... socket connect failed errno=%d", errno);
+        close(s);
+        freeaddrinfo(res);
+        vTaskDelay(4000 / portTICK_PERIOD_MS);
+        return recv_buf;
+    }
+
+    ESP_LOGI(TAG, "... connected");
+    freeaddrinfo(res);
+
+    printf("%s", routeApi);
+    if (write(s, routeApi, strlen(routeApi)) < 0)
+    {
+        ESP_LOGE(TAG, "... socket send failed");
+        close(s);
+        vTaskDelay(4000 / portTICK_PERIOD_MS);
+        return recv_buf;
+    }
+    ESP_LOGI(TAG, "... socket send success");
+
+    struct timeval receiving_timeout;
+    receiving_timeout.tv_sec = 5;
+    receiving_timeout.tv_usec = 0;
+    if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &receiving_timeout,
+                   sizeof(receiving_timeout)) < 0)
+    {
+        ESP_LOGE(TAG, "... failed to set socket receiving timeout");
+        close(s);
+        vTaskDelay(4000 / portTICK_PERIOD_MS);
+        return recv_buf;
+    }
+    ESP_LOGI(TAG, "... set socket receiving timeout success");
+
+    /* Read HTTP response */
+    // do
+    // {
+    //     bzero(recv_buf, sizeof(recv_buf));
+    //     r = read(s, recv_buf, sizeof(recv_buf) - 1);
+    //     for (int i = 0; i < r; i++)
+    //     {
+    //         putchar(recv_buf[i]);
+    //     }
+    // } while (r > 0);
+
+    bzero(recv_buf, sizeof(recv_buf));
+    r = read(s, recv_buf, sizeof(recv_buf) - 1);
+
+    ESP_LOGI(TAG, "... done reading from socket. Last read return=%d errno=%d.", r, errno);
+    close(s);
+
+    return recv_buf;
+}
+
+unsigned long int parseTime(){
+    char* head = recv_buf;
+    while(head - recv_buf < strlen(recv_buf) )    {
+        if(*head == '\r')    {
+        ++head;
+            if(*head == '\n')    {
+                ++head;
+                if(*head == '\r')    {
+                    ++head;
+                    if(*head == '\n')    {
+                        ++head;
+                        printf("-a%s\n", head);
+                        char *ptr;
+                        return strtol(head, &ptr, 0);
+                    }
+                }
+            }
+        }
+        ++head;
+    }
+    return 0;
+}
+
+void sendData(void *param)
+{
+    char req[128];
 
     while (1)
     {
-        int err = getaddrinfo("192.168.2.116", WEB_PORT, &hints, &res);
-
-        if (err != 0 || res == NULL)
-        {
-            ESP_LOGE(TAG, "DNS lookup failed err=%d res=%p", err, res);
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-            continue;
-        }
-
-        /* Code to print the resolved IP.
-
-           Note: inet_ntoa is non-reentrant, look at ipaddr_ntoa_r for "real" code */
-        addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
-        ESP_LOGI(TAG, "DNS lookup succeeded. IP=%s", inet_ntoa(*addr));
-
-        s = socket(res->ai_family, res->ai_socktype, 0);
-        if (s < 0)
-        {
-            ESP_LOGE(TAG, "... Failed to allocate socket.");
-            freeaddrinfo(res);
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-            continue;
-        }
-        ESP_LOGI(TAG, "... allocated socket");
-
-        if (connect(s, res->ai_addr, res->ai_addrlen) != 0)
-        {
-            ESP_LOGE(TAG, "... socket connect failed errno=%d", errno);
-            close(s);
-            freeaddrinfo(res);
-            vTaskDelay(4000 / portTICK_PERIOD_MS);
-            continue;
-        }
-
-        ESP_LOGI(TAG, "... connected");
-        freeaddrinfo(res);
-
-        snprintf(REQUEST, 128,
+        snprintf(req, 128,
                  "POST /api/device/%d/soil/%d/temp/%d/humid/%d HTTP/1.0\r\nHost: 192.168.2.116:80\r\nUser-Agent: esp-idf/1.0 esp32\r\n\r\n", data.deviceID, data.soil, data.temp, data.humid);
-        printf("%s", REQUEST);
-        if (write(s, REQUEST, strlen(REQUEST)) < 0)
-        {
-            ESP_LOGE(TAG, "... socket send failed");
-            close(s);
-            vTaskDelay(4000 / portTICK_PERIOD_MS);
-            continue;
-        }
-        ESP_LOGI(TAG, "... socket send success");
+        callapi(req);
+        callapi("GET /api/time HTTP/1.0\r\nHost: 192.168.2.116:80\r\nUser-Agent: esp-idf/1.0 esp32\r\n\r\n");
+        printf("%s\n", recv_buf);
+        
+        printf("%ld\n", parseTime());
 
-        struct timeval receiving_timeout;
-        receiving_timeout.tv_sec = 5;
-        receiving_timeout.tv_usec = 0;
-        if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &receiving_timeout,
-                       sizeof(receiving_timeout)) < 0)
-        {
-            ESP_LOGE(TAG, "... failed to set socket receiving timeout");
-            close(s);
-            vTaskDelay(4000 / portTICK_PERIOD_MS);
-            continue;
-        }
-        ESP_LOGI(TAG, "... set socket receiving timeout success");
-
-        /* Read HTTP response */
-        do
-        {
-            bzero(recv_buf, sizeof(recv_buf));
-            r = read(s, recv_buf, sizeof(recv_buf) - 1);
-            for (int i = 0; i < r; i++)
-            {
-                putchar(recv_buf[i]);
-            }
-        } while (r > 0);
-
-        ESP_LOGI(TAG, "... done reading from socket. Last read return=%d errno=%d.", r, errno);
-        close(s);
         vTaskDelay(10000 / portTICK_PERIOD_MS);
     }
 }
@@ -182,20 +222,22 @@ void sensor_read(void *param)
     while (1)
     {
         adc_raw = adc1_get_raw(SOIL_ADC_CHANN);
-        ESP_LOGI("ADC", "raw  data: %d", adc_raw);
+       // ESP_LOGI("ADC", "raw  data: %d", adc_raw);
         if (cali_enable)
         {
             voltage = esp_adc_cal_raw_to_voltage(adc_raw, &adc1_chars);
-            ESP_LOGI("ADC", "cali data: %d mV", voltage);
+        //    ESP_LOGI("ADC", "cali data: %d mV", voltage);
             // data.soil = voltage;
             const static float b = 0.01f;
             data.soil = (int)roundf((float)data.soil + b * ((float)voltage - (float)data.soil));
-            if(data.soil >= 2000){
-                gpio_set_level(27, 1);       
+            if (data.soil >= 1500)
+            {
+                gpio_set_level(27, 1);
             }
-            else {
+            else
+            {
                 gpio_set_level(27, 0);
-                }
+            }
         }
 
         struct dht11_reading dht11 = DHT11_read();
@@ -238,6 +280,4 @@ void app_main(void)
     xTaskCreate(&sensor_read, "readSoil", 4096, NULL, 10, NULL);
 
     DHT11_init(DHT);
-
-
 }
